@@ -46,3 +46,11 @@ If you find our dataset useful, please be sure to cite:
     url = "https://www.aclweb.org/anthology/D19-1131"
 }
 ```
+
+## Additions done for Alexa-Prize Taskbot challenge Intent Classification
+
+File `data/intent_mapping.json` has AP taskbot event to clinc intent mapping. All Clinc intents not mentioned
+automatically map to *undefined* custom intent.
+
+File `data/manual_data.json` has some custom intents for which we are creating manual data due to lack of existing data.
+

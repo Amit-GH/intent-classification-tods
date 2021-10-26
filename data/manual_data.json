@@ -1,0 +1,60 @@
+{
+    "navigation_ingredients": [
+        "show me the ingredients",
+        "what are the ingredients",
+        "move to ingredients",
+        "can you say the ingredients again",
+        "i forgot the ingredients",
+        "say the ingredients again",
+        "i missed the ingredients"
+    ],
+    "navigation_cooking": [
+        "let's move to cooking",
+        "let's start cooking",
+        "let's cook now",
+        "move to cooking steps",
+        "what are the cooking steps",
+        "jump to cooking",
+        "skip to cooking instructions"
+    ],
+    "navigation_pause": [
+        "take a break",
+        "pause",
+        "pause please",
+        "i have to go",
+        "i need to leave",
+        "i am tired",
+        "i am exhausted",
+        "wait for some time",
+        "wait",
+        "please wait for some time",
+        "please wait",
+        "it'll take time"
+    ],
+    "acknowledgement": [
+        "okay",
+        "okay i see",
+        "cool",
+        "okay cool",
+        "okay fine",
+        "fine",
+        "i get it",
+        "fine man",
+        "as you say",
+        "as you wish",
+        "getting onto it",
+        "i see",
+        "i see fine"
+    ],
+    "more_options": [
+        "what are other options",
+        "what the next items",
+        "what are other recipes",
+        "what are other tasks",
+        "show more options",
+        "show more recipes",
+        "show more tasks",
+        "what else do you have",
+        "what else"
+    ]
+}

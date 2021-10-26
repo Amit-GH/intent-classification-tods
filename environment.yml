@@ -1,0 +1,9 @@
+name: oos-eval
+channels:
+  - defaults
+dependencies:
+  - python=3.9
+  - transformers=4.11.2
+  - pytorch
+  - scikit-learn
+prefix: /Users/amitgh/opt/anaconda3/envs/oos-eval

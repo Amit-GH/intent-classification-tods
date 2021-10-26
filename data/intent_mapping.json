@@ -1,0 +1,109 @@
+{
+    "recipe_question": [
+        "meal_suggestion",
+        "recipe",
+        "ingredients_list"
+    ],
+    "recipe_name": [],
+    "diy_question": [],
+    "intermediate_question": [
+        "food_last",
+        "calories",
+        "nutrition_info",
+        "ingredient_substitution",
+        "cook_time"
+    ],
+    "financial": [
+        "freeze_account",
+        "routing",
+        "pin_change",
+        "bill_due",
+        "pay_bill",
+        "account_blocked",
+        "interest_rate",
+        "min_payment",
+        "bill_balance",
+        "transfer",
+        "order_checks",
+        "balance",
+        "spending_history",
+        "transactions",
+        "report_fraud",
+        "replacement_card_duration",
+        "expiration_date",
+        "damaged_card",
+        "improve_credit_score",
+        "report_lost_card",
+        "card_declined",
+        "credit_limit_change",
+        "apr",
+        "redeem_rewards",
+        "credit_limit",
+        "rewards_balance",
+        "application_status",
+        "credit_score",
+        "new_card",
+        "international_fees",
+        "income",
+        "taxes",
+        "payday"
+    ],
+    "legal": [],
+    "medical": [],
+    "privacy": [],
+    "timer": [
+        "timer"
+    ],
+    "shopping_list": [
+        "shopping_list"
+    ],
+    "what_is_your_name": [
+        "what_is_your_name"
+    ],
+    "where_are_you_from": [
+        "where_are_you_from"
+    ],
+    "who_made_you": [
+        "who_made_you"
+    ],
+    "ask_feature_question": [
+        "what_can_i_ask_you"
+    ],
+    "incomplete_question": [],
+    "navigation_repeat": [
+        "repeat"
+    ],
+    "navigation_resume": [],
+    "navigation_next": [],
+    "navigation_previous": [],
+    "navigation_ingredients": [],
+    "navigation_cooking": [],
+    "navigation_complete": [],
+    "navigation_bye": [
+        "goodbye"
+    ],
+    "navigation_pause": [],
+    "accept": [
+        "yes"
+    ],
+    "decline": [
+        "maybe",
+        "cancel",
+        "no"
+    ],
+    "step_completion": [],
+    "acknowledgement": [],
+    "more_options": [],
+    "small_talk": [
+        "what_are_your_hobbies",
+        "fun_fact",
+        "tell_joke"
+    ],
+    "greeting": [
+        "greeting"
+    ],
+    "thank_you": [
+        "thank_you"
+    ],
+    "undefined": []
+}

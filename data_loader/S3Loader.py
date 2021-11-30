@@ -95,6 +95,6 @@ if __name__ == '__main__':
     # test_temporary_directory()
     upload_res = upload_model("../saved_models/multiclass_cfn", {
         'bucket': "umass-alexaprize-model-hosting",
-        'path_to_model': "test_file_upload"
+        'path_to_model': "multiclass_intent_cfn"
     })
     print(upload_res)

@@ -1,0 +1,75 @@
+{
+    "recipe_question": [
+        "how to make coffee",
+        "how to cook egg benedict",
+        "how to make cheese pasta",
+        "how can I make roasted coffee"
+    ],
+    "intermediate_question": [
+        "how's the weather outside"
+    ],
+    "financial": [
+        "I want to open a bank account",
+        "Can you help me with credit cards?"
+    ],
+    "timer": [
+        "put a timer for 5 mins"
+    ],
+    "shopping_list": [
+        "What's in my shopping cart?",
+        "Add this ingredient to my shopping list"
+    ],
+    "what_is_your_name": [
+        "can you tell me your name?"
+    ],
+    "where_are_you_from": [
+        "which country are you from?"
+    ],
+    "who_made_you": [
+        "who's your creator?"
+    ],
+    "ask_feature_question": [
+        "what do you support?",
+        "help",
+        "help me",
+        "i am lost",
+        "i'm lost",
+        "i need help",
+        "what can you do for me"
+    ],
+    "navigation_repeat": [
+        "can you say this point again?",
+        "could you say it one more time for me"
+    ],
+    "navigation_bye": [
+        "see you later"
+    ],
+    "accept": [
+        "okay, let's do it."
+    ],
+    "decline": [
+        "i don't agree"
+    ],
+    "small_talk": [
+        "how's the weather today?",
+        "what's your favourite color?"
+    ],
+    "greeting": [
+        "hope you're having a nice day",
+        "good morning alexa"
+    ],
+    "thank_you": [
+        "thanks a lot",
+        "i appreciate your help"
+    ],
+    "undefined": [
+        "what the heck!",
+        "more options",
+        "show more options",
+        "okay",
+        "did that",
+        "move ahead",
+        "finished it",
+        "fine"
+    ]
+}

@@ -3,6 +3,7 @@ We create a data loader for CLINC150 dataset.
 """
 import json
 import os
+import sys
 from enum import Enum
 
 import torch
@@ -79,27 +80,46 @@ def _load_mapped_examples(raw_data: list, group: Group, custom_label_to_id: dict
     return label_count, data
 
 
-def print_partial_data(data: list[ClincSingleData], count_per_label=5):
+def print_partial_data(params: dict, count_per_label=5, clinc_labels=None):
+    """
+    Prints partial data from the original Clinc150 dataset for verification.
+    :param params: Has the root_path as a key.
+    :param count_per_label: number of items you want to see per label.
+    :param clinc_labels: list of labels that you want to see.
+    :return: None
+    """
+    root_path = params.get('root_path', '../../')
+    clinc_data_file_path = os.path.join(root_path, 'intent-classification-tods/data/data_full.json')
+    clinc_data = json.load(open(clinc_data_file_path, "r"))
+    data_raw = clinc_data[Group.train.value]
     label_examples = {}
-    for example in data:
-        label_examples.setdefault(example.label_id, [])
-        current_examples = label_examples[example.label_id]
+
+    for example in data_raw:
+        sentence = example[0]
+        clinc_label = example[1]
+        if clinc_labels and clinc_label not in clinc_labels:
+            continue
+        label_examples.setdefault(clinc_label, [])
+        current_examples = label_examples[clinc_label]
         if len(current_examples) < count_per_label:
-            current_examples.append(example.sentence)
+            current_examples.append(sentence)
+
     for label, sentences in label_examples.items():
         print(label)
         for sentence in sentences:
             print('\t' + sentence)
 
 
-def load_mapped_data(params: dict):
+def load_mapped_data(params: dict, balance_split=True):
     """
     To load clinc data into training, validation and testing which is mapped into custom classes as defined in
-    the file intent_mapping.json
+    the file intent_mapping.json.
+    balance_split: bool: if true, we balance the number of examples of each class to be in the same range for all
+        the three splits.
     :return:
     """
     root_path = params.get('root_path', '../../')
-    intent_mapping_file_path = os.path.join(root_path, 'oos-eval/data/intent_mapping.json')
+    intent_mapping_file_path = os.path.join(root_path, 'intent-classification-tods/data/intent_mapping.json')
     intent_mapping: dict = json.load(open(intent_mapping_file_path, "r"))
 
     # A dict mapping clinc class to one unique custom class.
@@ -113,7 +133,7 @@ def load_mapped_data(params: dict):
     print('clinc_to_custom: {}'.format(clinc_to_custom))
 
     # Load entire clinc data.
-    clinc_data_file_path = os.path.join(root_path, 'oos-eval/data/data_full.json')
+    clinc_data_file_path = os.path.join(root_path, 'intent-classification-tods/data/data_full.json')
     clinc_data = json.load(open(clinc_data_file_path, "r"))
 
     # Create label ids for labels we care about. These are custom labels.
@@ -128,28 +148,31 @@ def load_mapped_data(params: dict):
             idx += 1
     # print('Total custom labels: {}\nCustom label names: {}'.format(len(label2id), label2id.keys()))
 
-    # Load validation data.
+    # Load validation, train, test data.
     lc_val, val_data = _load_custom_data(clinc_data, clinc_to_custom, id2label, label2id, Group.val)
-    # print(sorted(lc_val.items(), key=lambda x: x[0]))
-    lc_val_bal, val_data_bal = balance_data(lc_val, val_data, 40, 100)
-
-    # Load training data.
     lc_train, train_data = _load_custom_data(clinc_data, clinc_to_custom, id2label, label2id, Group.train)
     # print(sorted(lc_train.items(), key=lambda x: x[0]))
-    lc_train_bal, train_data_bal = balance_data(lc_train, train_data, 200, 500)
-
-    # Load test data.
     lc_test, test_data = _load_custom_data(clinc_data, clinc_to_custom, id2label, label2id, Group.test)
-    # print(sorted(lc_test.items(), key=lambda x: x[0]))
-    lc_test_bal, test_data_bal = balance_data(lc_test, test_data, 60, 150)
 
-    return {
-        Group.train.value: (lc_train_bal, train_data_bal),
-        Group.val.value: (lc_val_bal, val_data_bal),
-        Group.test.value: (lc_test_bal, test_data_bal),
-        "label2id": label2id,
-        "id2label": id2label
-    }
+    if balance_split:
+        lc_val_bal, val_data_bal = balance_data(lc_val, val_data, 40, 100)
+        lc_train_bal, train_data_bal = balance_data(lc_train, train_data, 200, 500)
+        lc_test_bal, test_data_bal = balance_data(lc_test, test_data, 60, 150)
+        return {
+            Group.train.value: (lc_train_bal, train_data_bal),
+            Group.val.value: (lc_val_bal, val_data_bal),
+            Group.test.value: (lc_test_bal, test_data_bal),
+            "label2id": label2id,
+            "id2label": id2label
+        }
+    else:
+        return {
+            Group.train.value: (lc_train, train_data),
+            Group.val.value: (lc_val, val_data),
+            Group.test.value: (lc_test, test_data),
+            "label2id": label2id,
+            "id2label": id2label
+        }
 
 
 def _load_custom_data(clinc_data: dict, clinc_to_custom: dict, id2label: dict, label2id: dict, group: Group, verbose=False):
@@ -211,9 +234,9 @@ def balance_data(
 
 def load_data(params: dict) -> dict:
     root_path = params.get('root_path', '../../')
-    file_path = os.path.join(root_path, 'oos-eval/data/data_full.json')
+    file_path = os.path.join(root_path, 'intent-classification-tods/data/data_full.json')
     data_full = json.load(open(file_path, "r"))
-    data_domains = json.load(open(os.path.join(root_path, 'oos-eval/data/domains.json')))
+    data_domains = json.load(open(os.path.join(root_path, 'intent-classification-tods/data/domains.json')))
 
     # label_to_id = {}
     # label_id = 0
@@ -264,5 +287,6 @@ class ClincDataSet(Dataset):
 
 if __name__ == '__main__':
     # load_data({})
-    mapped_data = load_mapped_data({})
-
+    # mapped_data = load_mapped_data({})
+    print_partial_data({}, count_per_label=20, clinc_labels=["what_can_i_ask_you"])
+    sys.exit()

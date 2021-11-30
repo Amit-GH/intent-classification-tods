@@ -4,8 +4,9 @@ channels:
   - conda-forge
 dependencies:
   - python=3.9
-  - transformers=4.11.2
-  - pytorch
+  - transformers=4.12.2
+  - pytorch=1.10.0
   - scikit-learn
   - wandb
+  - boto3
 prefix: /Users/amitgh/opt/anaconda3/envs/oos-eval

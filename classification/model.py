@@ -14,7 +14,14 @@ from data_loader.S3Loader import load_model, upload_model
 import torch
 import wandb
 
-device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+if torch.cuda.is_available():
+    device_name = torch.cuda.get_device_name()
+    n_gpu = torch.cuda.device_count()
+    print(f"Found device: {device_name}, n_gpu: {n_gpu}")
+    device = torch.device("cuda")
+else:
+    device = torch.device('cpu')
+print(f'device={device}')
 local_model_directory = "../saved_models/multiclass_cfn"
 
 
@@ -237,7 +244,7 @@ def train_classifier_with_unbalanced_data(save_locally=True, s3_params=None):
             if (i + 1) % print_every == 0:
                 print(f'train_batch_loss = {train_batch_loss}')
                 wandb.log({'train_batch_loss': train_batch_loss})
-                _, _ = perform_validation(model, val_loader, criterion, num_batches=2)
+                _, _ = perform_validation(model, val_loader, criterion, num_batches=2, log_metric=True)
         print(f'Epoch = {epoch}, train loss = {train_loss}')
         wandb.log({'train_loss': train_loss})
         _, _ = perform_validation(model, val_loader, criterion, log_metric=True, num_batches=2)

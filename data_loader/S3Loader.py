@@ -9,6 +9,8 @@ from io import BytesIO
 from tempfile import NamedTemporaryFile
 from transformers import PretrainedConfig, PreTrainedModel, AutoModelForSequenceClassification
 
+from data_loader.DataLoader import load_model_from_disk, load_object_from_disk
+
 
 @contextmanager
 def s3_fileobj(bucket, key):
@@ -23,6 +25,29 @@ def s3_fileobj(bucket, key):
     s3 = boto3.client("s3")
     obj = s3.get_object(Bucket=bucket, Key=key)
     yield BytesIO(obj["Body"].read())
+
+
+def load_model_from_single_file(s3_params: dict, model_name: str):
+    bucket = s3_params['bucket']
+    path_to_model = s3_params['path_to_model']
+    model = None
+
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        model_file = NamedTemporaryFile()
+        with s3_fileobj(bucket, f'{path_to_model}/{model_name}') as f:
+            model_file.write(f.read())
+        model_file_exp_name = f'{tmpdirname}/{model_name}'
+        os.link(model_file.name, model_file_exp_name)
+        id2label = load_object_from_disk("../saved_models/class_imbalance/id2label.pickle")
+        label2id = load_object_from_disk("../saved_models/class_imbalance/label2id.pickle")
+        empty_model = AutoModelForSequenceClassification.from_pretrained(
+            "distilbert-base-uncased",
+            num_labels=len(id2label),
+            id2label=id2label,
+            label2id=label2id
+        )
+        model = load_model_from_disk(model_file_exp_name, empty_model)
+        print('done')
 
 
 def load_model(bucket, path_to_model, model_name='pytorch_model') -> PreTrainedModel:
@@ -65,16 +90,21 @@ def load_model(bucket, path_to_model, model_name='pytorch_model') -> PreTrainedM
     return model
 
 
-def upload_model(local_directory_path: str, s3_params: dict):
+def upload_model(s3_params: dict, local_directory_path=None, local_model_path=None):
     bucket = s3_params['bucket']
     path_to_model = s3_params['path_to_model']
 
     s3 = boto3.client("s3")
     try:
-        s3.upload_file(f'{local_directory_path}/config.json', bucket, f'{path_to_model}/config.json')
-        s3.upload_file(f'{local_directory_path}/pytorch_model.bin', bucket, f'{path_to_model}/pytorch_model.bin')
-        print("S3 Upload Successful")
-        return True
+        if local_directory_path:
+            s3.upload_file(f'{local_directory_path}/config.json', bucket, f'{path_to_model}/config.json')
+            s3.upload_file(f'{local_directory_path}/pytorch_model.bin', bucket, f'{path_to_model}/pytorch_model.bin')
+            print("S3 Upload Successful")
+            return True
+        elif local_model_path:
+            model_name = local_model_path.split('/')[-1]
+            s3.upload_file(local_model_path, bucket, f'{path_to_model}/{model_name}')
+            return True
     except Exception as e:
         print("Error in uploading model files. ", e)
         return False
@@ -93,8 +123,33 @@ if __name__ == '__main__':
     # model = load_model('umass-alexaprize-model-hosting', 'multiclass_intent_cfn')
     # print('Model loaded from S3.')
     # test_temporary_directory()
-    upload_res = upload_model("../saved_models/multiclass_cfn", {
-        'bucket': "umass-alexaprize-model-hosting",
-        'path_to_model': "multiclass_intent_cfn"
-    })
-    print(upload_res)
+    # upload_res = upload_model(
+    #     local_directory_path="../saved_models/multiclass_cfn",
+    #     s3_params={
+    #         'bucket': "umass-alexaprize-model-hosting",
+    #         'path_to_model': "multiclass_intent_cfn"
+    #     }
+    # )
+
+    # Credentials needed if running in some random EC2 instance.
+    os.environ.setdefault('AWS_ACCESS_KEY_ID', 'AKIA3OIIZGHY535S56XW')
+    os.environ.setdefault('AWS_SECRET_ACCESS_KEY', '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')
+
+    # upload_res = upload_model(
+    #     s3_params={
+    #         'bucket': "umass-alexaprize-model-hosting",
+    #         'path_to_model': "weighted_multiclass_cfn"
+    #     },
+    #     local_model_path="../saved_models/class_imbalance/dict_values([0.0001, 15000, 10, 512, 5, 'DistilBertModel+Linear', 'modified-CLINC150'])"
+    # )
+    # print(upload_res)
+
+    # TODO: error in below loading code.
+    # load_model_from_single_file(
+    #     s3_params={
+    #         'bucket': "umass-alexaprize-model-hosting",
+    #         'path_to_model': "weighted_multiclass_cfn"
+    #     },
+    #     model_name="dict_values([0.0001, 15000, 10, 512, 5, 'DistilBertModel+Linear', 'modified-CLINC150']"
+    # )
+

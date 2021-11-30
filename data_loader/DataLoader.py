@@ -3,11 +3,13 @@ We create a data loader for CLINC150 dataset.
 """
 import json
 import os
+import pickle
 import sys
 from enum import Enum
 
 import torch
 from numpy.random import default_rng
+from torch import nn
 from torch.utils.data import Dataset
 from torch.utils.data.dataset import T_co
 
@@ -290,3 +292,15 @@ if __name__ == '__main__':
     # mapped_data = load_mapped_data({})
     print_partial_data({}, count_per_label=20, clinc_labels=["what_can_i_ask_you"])
     sys.exit()
+
+
+def load_model_from_disk(save_path: str, empty_model: nn.Module) -> nn.Module:
+    empty_model.load_state_dict(torch.load(save_path))
+    empty_model.eval()
+    print('Model loaded from path {} successfully.'.format(save_path))
+    return empty_model
+
+
+def load_object_from_disk(complete_path: str):
+    with open(complete_path, 'rb') as f:
+        return pickle.load(f)

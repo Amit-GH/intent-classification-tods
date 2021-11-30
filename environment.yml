@@ -1,7 +1,7 @@
 name: oos-eval
 channels:
-  - defaults
   - conda-forge
+  - defaults
 dependencies:
   - python=3.9
   - transformers=4.12.2
@@ -9,4 +9,5 @@ dependencies:
   - scikit-learn
   - wandb
   - boto3
+  - torchvision=0.10.0
 prefix: /Users/amitgh/opt/anaconda3/envs/oos-eval

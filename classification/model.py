@@ -1,15 +1,18 @@
 import json
 import os
+import pickle
 import sys
+from enum import Enum
 
 import numpy as np
 from torch import nn, optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import DistilBertModel, DistilBertTokenizer, Trainer, PreTrainedModel, \
-    PreTrainedTokenizer, DistilBertForSequenceClassification
+    PreTrainedTokenizer
 from transformers import AutoModelForSequenceClassification, TrainingArguments
-from data_loader.DataLoader import ClincDataSet, load_data, Group, load_mapped_data, ClincSingleData
+from data_loader.DataLoader import ClincDataSet, load_data, Group, load_mapped_data, ClincSingleData, \
+    load_model_from_disk
 from data_loader.S3Loader import load_model, upload_model
 import torch
 import wandb
@@ -23,6 +26,13 @@ else:
     device = torch.device('cpu')
 print(f'device={device}')
 local_model_directory = "../saved_models/multiclass_cfn"
+
+
+def persist_model(my_model, path_root="../saved_models/", append_name="") -> str:
+    save_path = path_root + append_name
+    torch.save(my_model.state_dict(), save_path)
+    print("Model saved in path {}".format(save_path))
+    return save_path
 
 
 def load_pretrained_model(model_directory=local_model_directory, s3_param=None) \
@@ -152,6 +162,9 @@ def perform_validation(model, val_loader, criterion, log_metric=False, num_batch
     model.eval()
     val_running_loss = 0.0
     val_running_correct = 0
+    label_total_count = np.zeros(len(model.config.id2label))
+    label_correct_count = np.zeros_like(label_total_count)
+
     with torch.no_grad():
         for i, batch in enumerate(val_loader):
             for k, v in batch.items():
@@ -161,24 +174,42 @@ def perform_validation(model, val_loader, criterion, log_metric=False, num_batch
             val_running_loss += loss.item()
             _, preds = torch.max(outputs.logits, dim=1)
             val_running_correct += (preds == batch['labels']).sum().item()
+
+            # Calculate label wise accuracy data.
+            for label_id in batch['labels']:
+                label_total_count[label_id] += 1
+            for j, is_correct in enumerate(preds == batch['labels']):
+                if is_correct:
+                    label_correct_count[batch['labels'][j]] += 1
+
             if num_batches == (i + 1):  # early stopping
                 break
     val_loss = val_running_loss
     val_accuracy = 100. * val_running_correct / len(val_loader.dataset)
     if log_metric:
         print(f'Val Loss: {val_loss:.4f}, Val Acc: {val_accuracy:.2f}')
+        label_accuracy = label_correct_count / label_total_count * 100
+        for i, acc in enumerate(label_accuracy):
+            print(f'id: {i}, label: {model.config.id2label[i]}, acc: {acc:.2f}')
         wandb.log({
             'val_loss': val_loss,
-            'val_acc': val_loss
+            'val_acc': val_accuracy
         })
+
     return val_loss, val_accuracy
 
 
-def train_classifier_with_unbalanced_data(save_locally=True, s3_params=None):
-    batch_size = 512
-    max_epochs = 1
-    print_every = 2
+def persist_object_to_disk(obj, complete_path: str):
+    with open(complete_path, 'wb') as f:
+        pickle.dump(obj, f, pickle.HIGHEST_PROTOCOL)
 
+
+def train_classifier_with_unbalanced_data(
+        max_epochs=1, batch_size=512, print_every=2,
+        save_locally=True, s3_params=None,
+        start_from_pretrained=False, pretrained_model_path=None,
+        wandb_mode="online"
+):
     mapped_data = load_mapped_data({}, balance_split=False)
 
     id2label = mapped_data['id2label']
@@ -190,6 +221,13 @@ def train_classifier_with_unbalanced_data(save_locally=True, s3_params=None):
         id2label=id2label,
         label2id=label2id
     )
+    # Save model metadata to disk for later usage.
+    persist_object_to_disk(id2label, "../saved_models/class_imbalance/id2label.pickle")
+    persist_object_to_disk(label2id, "../saved_models/class_imbalance/label2id.pickle")
+
+    if start_from_pretrained:
+        load_model_from_disk(save_path=pretrained_model_path, empty_model=model)
+
     tokenizer = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")
 
     train_dataset = ClincDataSet(mapped_data[Group.train.value][1], tokenizer)
@@ -206,7 +244,7 @@ def train_classifier_with_unbalanced_data(save_locally=True, s3_params=None):
     model.to(device)
 
     # Create a weighted loss metric. Keep type similar to that of the model.
-    criterion = nn.CrossEntropyLoss(weight=torch.tensor(train_class_weights, dtype=torch.float32))
+    criterion = nn.CrossEntropyLoss(weight=torch.tensor(train_class_weights, dtype=torch.float32, device=device))
 
     optimizer = optim.AdamW(model.parameters(),
                             lr=1e-4,
@@ -224,7 +262,9 @@ def train_classifier_with_unbalanced_data(save_locally=True, s3_params=None):
         "architecture": "DistilBertModel+Linear",
         "dataset": "modified-CLINC150"
     }
-    wandb.init(project="ms-project-701", entity="amitgh", config=config)
+    wandb.init(project="ms-project-701", entity="amitgh", config=config, mode=wandb_mode)
+
+    best_val_acc = 0
 
     for epoch in tqdm(range(max_epochs), total=max_epochs):
         model.train()
@@ -242,12 +282,21 @@ def train_classifier_with_unbalanced_data(save_locally=True, s3_params=None):
             train_batch_loss = loss.item()
             train_loss += train_batch_loss
             if (i + 1) % print_every == 0:
-                print(f'train_batch_loss = {train_batch_loss}')
-                wandb.log({'train_batch_loss': train_batch_loss})
-                _, _ = perform_validation(model, val_loader, criterion, num_batches=2, log_metric=True)
+                _, preds = torch.max(outputs.logits, dim=1)
+                train_batch_acc = (preds == batch['labels']).to(torch.float32).mean().item() * 100
+                print(f'train_batch_loss = {train_batch_loss}, train_batch_acc = {train_batch_acc}')
+                wandb.log({
+                    'train_batch_loss': train_batch_loss,
+                    'train_batch_acc': train_batch_acc
+                })
+                _, _ = perform_validation(model, val_loader, criterion, log_metric=True)
         print(f'Epoch = {epoch}, train loss = {train_loss}')
         wandb.log({'train_loss': train_loss})
-        _, _ = perform_validation(model, val_loader, criterion, log_metric=True, num_batches=2)
+        val_loss, val_acc = perform_validation(model, val_loader, criterion, log_metric=True)
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            if save_locally:
+                persist_model(model, append_name=f"class_imbalance/{config.values()}")
     print('done')
 
 
@@ -415,6 +464,12 @@ def test_cuda():
     print('cuda available:', torch.cuda.is_available())
 
 
+class WandbMode(Enum):
+    ONLINE = "online"
+    OFFLINE = "offline"
+    DISABLED = "disabled"
+
+
 if __name__ == '__main__':
     # setup()
     # test_pretrained()
@@ -455,6 +510,7 @@ if __name__ == '__main__':
     #     model_directory="../saved_models/fine_tuned_cfn"
     # )
 
-    train_classifier_with_unbalanced_data(save_locally=False)
+    train_classifier_with_unbalanced_data(max_epochs=10, print_every=5, save_locally=True,
+                                          wandb_mode=WandbMode.ONLINE.value)
 
     sys.exit()

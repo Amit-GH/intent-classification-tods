@@ -1,4 +1,5 @@
 import os
+import pickle
 import tempfile
 
 import boto3
@@ -32,22 +33,24 @@ def load_model_from_single_file(s3_params: dict, model_name: str):
     path_to_model = s3_params['path_to_model']
     model = None
 
-    with tempfile.TemporaryDirectory() as tmpdirname:
-        model_file = NamedTemporaryFile()
-        with s3_fileobj(bucket, f'{path_to_model}/{model_name}') as f:
-            model_file.write(f.read())
-        model_file_exp_name = f'{tmpdirname}/{model_name}'
-        os.link(model_file.name, model_file_exp_name)
-        id2label = load_object_from_disk("../saved_models/class_imbalance/id2label.pickle")
-        label2id = load_object_from_disk("../saved_models/class_imbalance/label2id.pickle")
-        empty_model = AutoModelForSequenceClassification.from_pretrained(
-            "distilbert-base-uncased",
-            num_labels=len(id2label),
-            id2label=id2label,
-            label2id=label2id
-        )
-        model = load_model_from_disk(model_file_exp_name, empty_model)
-        print('done')
+    with s3_fileobj(bucket, f'{path_to_model}/id2label.pickle') as f:
+        id2label = pickle.loads(f.read())
+    with s3_fileobj(bucket, f'{path_to_model}/label2id.pickle') as f:
+        label2id = pickle.loads(f.read())
+
+    empty_model = AutoModelForSequenceClassification.from_pretrained(
+        "distilbert-base-uncased",
+        num_labels=len(id2label),
+        id2label=id2label,
+        label2id=label2id
+    )
+
+    model_file = NamedTemporaryFile()
+    with s3_fileobj(bucket, f'{path_to_model}/{model_name}') as f:
+        model_file.write(f.read())
+
+    model = load_model_from_disk(model_file.name, empty_model)
+    return model
 
 
 def load_model(bucket, path_to_model, model_name='pytorch_model') -> PreTrainedModel:
@@ -90,7 +93,28 @@ def load_model(bucket, path_to_model, model_name='pytorch_model') -> PreTrainedM
     return model
 
 
+def upload_pickle_files(s3_params: dict, local_file_path) -> bool:
+    bucket = s3_params['bucket']
+    path_to_model = s3_params['path_to_model']
+
+    try:
+        s3 = boto3.client("s3")
+        file_name = local_file_path.split('/')[-1]
+        s3.upload_file(local_file_path, bucket, f'{path_to_model}/{file_name}')
+        return True
+    except Exception as e:
+        print(f'Got exception {e}')
+        return False
+
+
 def upload_model(s3_params: dict, local_directory_path=None, local_model_path=None):
+    """
+    Upload the model to S3.
+    :param s3_params: dict containing bucket and path_to_model parameters.
+    :param local_directory_path: Directory path that has config.json and pytorch_model.bin files.
+    :param local_model_path: complete file path saving the model in a single file.
+    :return: True if the model uploads successfully else False.
+    """
     bucket = s3_params['bucket']
     path_to_model = s3_params['path_to_model']
 
@@ -103,7 +127,8 @@ def upload_model(s3_params: dict, local_directory_path=None, local_model_path=No
             return True
         elif local_model_path:
             model_name = local_model_path.split('/')[-1]
-            s3.upload_file(local_model_path, bucket, f'{path_to_model}/{model_name}')
+            s3.upload_file(local_model_path, bucket, f'{path_to_model}/{model_name}.pt')
+            print("S3 Upload Successful")
             return True
     except Exception as e:
         print("Error in uploading model files. ", e)
@@ -135,21 +160,33 @@ if __name__ == '__main__':
     os.environ.setdefault('AWS_ACCESS_KEY_ID', 'AKIA3OIIZGHY535S56XW')
     os.environ.setdefault('AWS_SECRET_ACCESS_KEY', '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')
 
+    # print('Uploading the model.')
     # upload_res = upload_model(
     #     s3_params={
     #         'bucket': "umass-alexaprize-model-hosting",
-    #         'path_to_model': "weighted_multiclass_cfn"
+    #         'path_to_model': "test_folder"
     #     },
     #     local_model_path="../saved_models/class_imbalance/dict_values([0.0001, 15000, 10, 512, 5, 'DistilBertModel+Linear', 'modified-CLINC150'])"
     # )
-    # print(upload_res)
+    # print(f'Model uploaded: {upload_res}')
 
-    # TODO: error in below loading code.
-    # load_model_from_single_file(
+    # print('Uploading pickle files.')
+    # upload_files = upload_pickle_files(
     #     s3_params={
     #         'bucket': "umass-alexaprize-model-hosting",
-    #         'path_to_model': "weighted_multiclass_cfn"
+    #         'path_to_model': "test_folder"
     #     },
-    #     model_name="dict_values([0.0001, 15000, 10, 512, 5, 'DistilBertModel+Linear', 'modified-CLINC150']"
+    #     local_file_path="../saved_models/class_imbalance/label2id.pickle"
     # )
+    # print(f'Files uploaded: {upload_files}.')
 
+    # TODO: error in below loading code.
+    my_model = load_model_from_single_file(
+        s3_params={
+            'bucket': "umass-alexaprize-model-hosting",
+            'path_to_model': "test_folder"
+        },
+        # model_name="dict_values([0.0001, 15000, 10, 512, 5, 'DistilBertModel+Linear', 'modified-CLINC150'].pt"
+        model_name="weighted_class_model.pt"
+    )
+    print('done')

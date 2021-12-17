@@ -13,6 +13,19 @@ from torch import nn
 from torch.utils.data import Dataset
 from torch.utils.data.dataset import T_co
 
+
+def get_torch_device():
+    if torch.cuda.is_available():
+        device_name = torch.cuda.get_device_name()
+        n_gpu = torch.cuda.device_count()
+        print(f"Found device: {device_name}, n_gpu: {n_gpu}")
+        device = torch.device("cuda")
+    else:
+        device = torch.device('cpu')
+    return device
+
+
+device = get_torch_device()
 rng = default_rng()
 
 
@@ -295,7 +308,7 @@ if __name__ == '__main__':
 
 
 def load_model_from_disk(save_path: str, empty_model: nn.Module) -> nn.Module:
-    empty_model.load_state_dict(torch.load(save_path))
+    empty_model.load_state_dict(torch.load(save_path, map_location=device))
     empty_model.eval()
     print('Model loaded from path {} successfully.'.format(save_path))
     return empty_model

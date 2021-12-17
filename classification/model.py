@@ -12,20 +12,15 @@ from transformers import DistilBertModel, DistilBertTokenizer, Trainer, PreTrain
     PreTrainedTokenizer
 from transformers import AutoModelForSequenceClassification, TrainingArguments
 from data_loader.DataLoader import ClincDataSet, load_data, Group, load_mapped_data, ClincSingleData, \
-    load_model_from_disk
+    load_model_from_disk, get_torch_device
 from data_loader.S3Loader import load_model, upload_model
 import torch
 import wandb
 
-if torch.cuda.is_available():
-    device_name = torch.cuda.get_device_name()
-    n_gpu = torch.cuda.device_count()
-    print(f"Found device: {device_name}, n_gpu: {n_gpu}")
-    device = torch.device("cuda")
-else:
-    device = torch.device('cpu')
+
+device = get_torch_device()
 print(f'device={device}')
-local_model_directory = "../saved_models/multiclass_cfn"
+local_model_directory = "../saved_models/multiclass_cfn2"
 
 
 def persist_model(my_model, path_root="../saved_models/", append_name="") -> str:
@@ -95,16 +90,17 @@ def analyze_predictions(group: str, max_incorrect_count=10, model_directory=None
                     break
 
 
-def multi_class_classifier_accuracy(group: str, model_directory=local_model_directory, s3_params=None):
+def multi_class_classifier_accuracy(group: str, model_directory=local_model_directory, s3_params=None, balance_split=True):
     model, tokenizer = load_pretrained_model(
         model_directory=model_directory,
         s3_param=s3_params if s3_params else None
     )
+    model.to(device)
     configuration = model.config
 
     assert group in [Group.val.value, Group.test.value]
 
-    mapped_data = load_mapped_data({})
+    mapped_data = load_mapped_data({}, balance_split=balance_split)
     test_dataset = ClincDataSet(mapped_data[group][1], tokenizer)
 
     data_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
@@ -123,7 +119,7 @@ def multi_class_classifier_accuracy(group: str, model_directory=local_model_dire
             preds_softmax = torch.softmax(outputs.logits, dim=1).tolist()
             preds = np.argmax(preds_softmax, axis=1)
 
-            labels_np = labels.numpy()
+            labels_np = labels.cpu().numpy()
             preds_mask = 1 * (labels_np == preds)  # 1=correct, 0=incorrect
             for i, value in enumerate(preds_mask):
                 right, wrong = label_to_stats.get(labels_np[i], (0, 0))
@@ -301,6 +297,9 @@ def train_classifier_with_unbalanced_data(
 
 
 def train_multi_class_classifier(save_locally=True, s3_params=None):
+    os.environ.setdefault('WANDB_API_KEY', '713a778aae8db6219a582a6b794204a5af2cb75d')
+    wandb.login()
+
     mapped_data = load_mapped_data({})
 
     id2label = mapped_data['id2label']
@@ -328,6 +327,8 @@ def train_multi_class_classifier(save_locally=True, s3_params=None):
         weight_decay=0.01,  # strength of weight decay
         logging_dir='../output_dir/logs',  # directory for storing logs
         logging_steps=10,
+        report_to="wandb",
+        run_name="balanced_multiclass_cfn_train"
     )
 
     trainer = Trainer(
@@ -475,7 +476,9 @@ if __name__ == '__main__':
     # test_pretrained()
     # test_cuda()
 
-    # train_multi_class_classifier(save_locally=False)
+    # os.environ.set("WANDB_DISABLED", "true")
+
+    # train_multi_class_classifier(save_locally=True)
 
     # Current S3 model: Accuracy for val = 0.95, Accuracy for test = 0.955
     # Complete fine-tuned model ep=1: Accuracy for val = 0.955, Accuracy for test = 0.957
@@ -490,7 +493,7 @@ if __name__ == '__main__':
     #         'path_to_model': "multiclass_intent_cfn"
     #     }
     # )
-    # multi_class_classifier_accuracy(Group.val.value)
+    multi_class_classifier_accuracy(Group.test.value, balance_split=False)
 
     # analyze_predictions(Group.val.value, max_incorrect_count=20)
 
@@ -510,7 +513,7 @@ if __name__ == '__main__':
     #     model_directory="../saved_models/fine_tuned_cfn"
     # )
 
-    train_classifier_with_unbalanced_data(max_epochs=10, print_every=5, save_locally=True,
-                                          wandb_mode=WandbMode.ONLINE.value)
+    # train_classifier_with_unbalanced_data(max_epochs=10, print_every=5, save_locally=True,
+    #                                       wandb_mode=WandbMode.ONLINE.value)
 
     sys.exit()

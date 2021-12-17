@@ -1,56 +1,29 @@
-[![Clinc](clinc_logo.png)](https://clinc.com)
 
-# An Evaluation Dataset for Intent Classification and Out-of-Scope Prediction
-Repository that accompanies [An Evaluation Dataset for Intent Classification and Out-of-Scope Prediction](https://www.aclweb.org/anthology/D19-1131/).
-
+# Towards effective Task Oriented Dialogue Systems - Learning Intent Classification, Dialogue State Tracking and Question Answering
+This repository supports the MS Thesis work and CS685 course project.
 
 ## FAQs
-### 1. What are the relevant files?
-See `data/data_full.json` for the "full" dataset. This is the dataset used in Table 1 (the "Full" columns). This file contains 150 "in-scope" intent classes, each with 100 train, 20 validation, and 30 test samples. There are 100 train and validation out-of-scope samples, and 1000 out-of-scope test samples. 
+### 1. Where is the model training code?
+All training and evaluation code is present in `classification/model.py`. Once models are trained and saved locally or
+in S3, they are verified for their accuracy in `classification/model_check.py`.
 
-### 2. What is the name of the dataset?
-The dataset was not given a name in the original paper, but [others](https://arxiv.org/pdf/2003.04807.pdf) have called it `CLINC150`.
+### 2. Where is the dataset?
+1. `data/data_full.json` has the entire data including train, val and test splits.
+2. All intents along with domains are present in `data/domains.json`.
+3. AP taskbot intent to clinc intent mapping is present in `data/intent_mapping.json`.
+4. Examples user utterances for comparing different models are in `data/test_examples.json`.
+5. Some low resource intents with sample utterances are present in `data/manual_data.json`.
 
-### 3. What is this dataset for?
-This dataset is for evaluating the performance of intent classification systems in the presence of "out-of-scope" queries. By "out-of-scope", we mean queries that do not fall into any of the system-supported intent classes. Most datasets include only data that is "in-scope". Our dataset includes both in-scope and out-of-scope data. You might also know the term "out-of-scope" by other terms, including "out-of-domain" or "out-of-distribution". 
+### 3. Where is code to process dataset?
+1. Data preprocessing code is present in `data_loader/DataLoader.py`.
+2. Utility methods to interact with S3 is present in `data_loader/S3Loader.py`.
 
-### 4. What language is the dataset in?
-All queries are in English.
+### 4. How to run the code?
+1. Create the conda environment using the `environment.yml` file.
+2. All python files (`model.py`, `model_check.py`, `DataLoader.py` and `S3Loader.py`) have `main` methods that were run
+using IDE or command line to invoke specific functions. These functions are used for fine-tuning a model, saving a model
+locally, uploading and downloading models from S3 bucket, calculating validation and test accuracy on a saved fine-tuned
+model. There are methods for dataset creation (balanced or unbalanced) and training IC model with or without class 
+weights.
 
-### 5. How does your dataset/evaluation handle multi-intent queries?
-All samples/queries in our dataset are single-intent samples. We consider the problem of multi-intent classification to be future work.
-
-### 6. How did you gather the dataset?
-We used crowdsourcing to generate the dataset. We asked crowd workers to either paraphrase "seed" phrases, or respond to scenarios (e.g. "pretend you need to book a flight, what would you say?"). We used crowdsourcing to generate data for both in-scope and out-of-scope data.
-
-## Citation
-
-If you find our dataset useful, please be sure to cite:
-
-```
-@inproceedings{larson-etal-2019-evaluation,
-    title = "An Evaluation Dataset for Intent Classification and Out-of-Scope Prediction",
-    author = "Larson, Stefan  and
-      Mahendran, Anish  and
-      Peper, Joseph J.  and
-      Clarke, Christopher  and
-      Lee, Andrew  and
-      Hill, Parker  and
-      Kummerfeld, Jonathan K.  and
-      Leach, Kevin  and
-      Laurenzano, Michael A.  and
-      Tang, Lingjia  and
-      Mars, Jason",
-    booktitle = "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International Joint Conference on Natural Language Processing (EMNLP-IJCNLP)",
-    year = "2019",
-    url = "https://www.aclweb.org/anthology/D19-1131"
-}
-```
-
-## Additions done for Alexa-Prize Taskbot challenge Intent Classification
-
-File `data/intent_mapping.json` has AP taskbot event to clinc intent mapping. All Clinc intents not mentioned
-automatically map to *undefined* custom intent.
-
-File `data/manual_data.json` has some custom intents for which we are creating manual data due to lack of existing data.
-
+All code present in `classification` and `data_loader` directories has been written specifically for this project.

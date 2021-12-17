@@ -63,7 +63,7 @@ class ResponseGeneratorQA(ToolkitServiceModule):
         # Fall back to Bing search as Evi did not give satisfactory results.
         bing_retriever = BingRetriever(params={
             # Amit's personal free-tier subscription key for testing.
-            'subscription_key': '3e7d7e0f38ee47b69f6d73aea785bcb9',
+            'subscription_key': 'xxxx',
             'results_requested_count': 1,
             'logger': self.logger
         })

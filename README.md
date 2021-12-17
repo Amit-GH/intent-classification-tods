@@ -26,4 +26,16 @@ locally, uploading and downloading models from S3 bucket, calculating validation
 model. There are methods for dataset creation (balanced or unbalanced) and training IC model with or without class 
 weights.
 
+### 5. How is this linked to the AP taskbot challenge?
+The results of this paper are used in the taskbot challenge. While we have not added the codebase of the taskbot, we have
+added some files in the form of snippets that are relevant to the project paper. These snippets are present in the
+directory `ap-taskbot-snippets`. They cannot be run/executed. Description of each file is as follows:
+1. `ap-taskbot-snippets/automata_selecting_strategy.py` has code for using the results of intent classification module.
+It also has regex based code used for supporting the IC ML model. Method `decide_next_graph_input()` decides the intent
+based on both regex and IC model result. Methods `is_acknowledgement()`, `is_ask_help()`, `is_more_options()` and
+`is_say_ingredients()` show how we are using pattern matching for low resource intent classification.
+2. `ap-taskbot-snippets/qa_response_generator.py` has code to perform Bing web search and Evi search, and then perform
+additional filtering before using the results.
+3. `ap-taskbot-snippets/Retriever.py` has some data structures used for Bing and Evi search tasks.
+
 All code present in `classification` and `data_loader` directories has been written specifically for this project.

@@ -111,8 +111,8 @@ def check_label_wise_accuracy(s3_params=None, model_name=None, save_path=None, m
 
 if __name__ == '__main__':
     # Credentials needed if running in some random EC2 instance.
-    os.environ.setdefault('AWS_ACCESS_KEY_ID', 'AKIA3OIIZGHY535S56XW')
-    os.environ.setdefault('AWS_SECRET_ACCESS_KEY', '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')
+    os.environ.setdefault('AWS_ACCESS_KEY_ID', 'xxx')
+    os.environ.setdefault('AWS_SECRET_ACCESS_KEY', 'yyy')
 
     # Initialize but disable wandb for checking code.
     os.environ.setdefault('WANDB_API_KEY', '713a778aae8db6219a582a6b794204a5af2cb75d')

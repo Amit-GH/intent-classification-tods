@@ -12,20 +12,11 @@ from numpy.random import default_rng
 from torch import nn
 from torch.utils.data import Dataset
 from torch.utils.data.dataset import T_co
+from transformers import DistilBertTokenizer, AutoModelForSequenceClassification, PreTrainedModel, PreTrainedTokenizer
 
+from data_loader.S3Loader import load_model_from_single_file, s3_fileobj, load_model, load_model_from_disk
+from data_loader.device_setup import device
 
-def get_torch_device():
-    if torch.cuda.is_available():
-        device_name = torch.cuda.get_device_name()
-        n_gpu = torch.cuda.device_count()
-        print(f"Found device: {device_name}, n_gpu: {n_gpu}")
-        device = torch.device("cuda")
-    else:
-        device = torch.device('cpu')
-    return device
-
-
-device = get_torch_device()
 rng = default_rng()
 
 
@@ -125,12 +116,24 @@ def print_partial_data(params: dict, count_per_label=5, clinc_labels=None):
             print('\t' + sentence)
 
 
-def load_mapped_data(params: dict, balance_split=True):
+def load_amt_test_data(file_path: str):
+    id2label = load_object_from_disk("../saved_models/class_imbalance/id2label.pickle")
+    label2id = load_object_from_disk("../saved_models/class_imbalance/label2id.pickle")
+    amt_data = json.load(open(file_path, "r"))
+    amt_to_custom = dict()
+    for label in label2id:
+        amt_to_custom[label] = label
+    label_count_test, test_data = _load_custom_data(amt_data, amt_to_custom, id2label, label2id, Group.test)
+    return test_data
+
+
+def load_mapped_data(params: dict, balance_split=True, balance_strategy=None):
     """
     To load clinc data into training, validation and testing which is mapped into custom classes as defined in
     the file intent_mapping.json.
     balance_split: bool: if true, we balance the number of examples of each class to be in the same range for all
         the three splits.
+    balance_strategy: str: can be up or down indicating complete upsampling or complete downsampling.
     :return:
     """
     root_path = params.get('root_path', '../../')
@@ -170,9 +173,24 @@ def load_mapped_data(params: dict, balance_split=True):
     lc_test, test_data = _load_custom_data(clinc_data, clinc_to_custom, id2label, label2id, Group.test)
 
     if balance_split:
-        lc_val_bal, val_data_bal = balance_data(lc_val, val_data, 40, 100)
-        lc_train_bal, train_data_bal = balance_data(lc_train, train_data, 200, 500)
-        lc_test_bal, test_data_bal = balance_data(lc_test, test_data, 60, 150)
+        if balance_strategy == "up":
+            min_train_count = max_train_count = max(lc_train.values())
+            min_val_count = max_val_count = max(lc_val.values())
+            min_test_count = max_test_count = max(lc_test.values())
+        elif balance_strategy == "down":
+            min_train_count = max_train_count = min(lc_train.values())
+            min_val_count = max_val_count = min(lc_val.values())
+            min_test_count = max_test_count = min(lc_test.values())
+        elif balance_strategy is None:
+            min_train_count, max_train_count = 200, 500
+            min_val_count, max_val_count = 40, 100
+            min_test_count, max_test_count = 60, 150
+        else:
+            raise Exception("Unsupported balance strategy passed.")
+
+        lc_train_bal, train_data_bal = balance_data(lc_train, train_data, min_train_count, max_train_count)
+        lc_val_bal, val_data_bal = balance_data(lc_val, val_data, min_val_count, max_val_count)
+        lc_test_bal, test_data_bal = balance_data(lc_test, test_data, min_test_count, max_test_count)
         return {
             Group.train.value: (lc_train_bal, train_data_bal),
             Group.val.value: (lc_val_bal, val_data_bal),
@@ -307,13 +325,68 @@ if __name__ == '__main__':
     sys.exit()
 
 
-def load_model_from_disk(save_path: str, empty_model: nn.Module) -> nn.Module:
-    empty_model.load_state_dict(torch.load(save_path, map_location=device))
-    empty_model.eval()
-    print('Model loaded from path {} successfully.'.format(save_path))
-    return empty_model
-
-
 def load_object_from_disk(complete_path: str):
     with open(complete_path, 'rb') as f:
         return pickle.load(f)
+
+
+def load_pretrained_model_tokenizer(s3_params=None, model_name=None, save_path=None, model_directory=None):
+    """
+    Use s3_params and model_name for loading single file model from S3.
+    Use save_path for loading single file model from local disk.
+    Use model_directory for loading 2 file model from local disk.
+    Returns model, tokenizer, and boolean flag telling if model was trained on balanced data or not.
+    """
+    if s3_params:
+        bucket = s3_params['bucket']
+        path_to_model = s3_params['path_to_model']
+        model = load_model_from_single_file(
+            s3_params=s3_params,
+            model_name=model_name
+        )
+        model.to(device)
+        tokenizer = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")
+        with s3_fileobj(bucket, f'{path_to_model}/id2label.pickle') as f:
+            id2label = pickle.loads(f.read())
+    elif save_path:
+        id2label = load_object_from_disk("../saved_models/class_imbalance/id2label.pickle")
+        label2id = load_object_from_disk("../saved_models/class_imbalance/label2id.pickle")
+        empty_model = AutoModelForSequenceClassification.from_pretrained(
+            "distilbert-base-uncased",
+            num_labels=len(id2label),
+            id2label=id2label,
+            label2id=label2id
+        )
+        model = load_model_from_disk(save_path, empty_model)
+        model.to(device)
+        tokenizer = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")
+    elif model_directory:
+        model, tokenizer = load_pretrained_model(model_directory=model_directory)
+        model.to(device)
+        id2label = None
+    else:
+        raise Exception('provide model path to load.')
+
+    # We use id2label variable to determine if the model was trained on balanced or unbalanced data. Not a good way but
+    # fine for now.
+    return model, tokenizer, id2label is None
+
+
+local_model_directory = "../saved_models/multiclass_cfn2"
+
+
+def load_pretrained_model(model_directory=local_model_directory, s3_param=None) \
+        -> (PreTrainedModel, PreTrainedTokenizer):
+    if s3_param:
+        bucket = s3_param['bucket']
+        path_to_model = s3_param['path_to_model']
+        print('Loading model from S3. Bucket={}, path_to_model={}.'.format(bucket, path_to_model))
+        model = load_model(bucket, path_to_model)
+    else:
+        print('Loading model from {}.'.format(model_directory))
+        model: PreTrainedModel = AutoModelForSequenceClassification.from_pretrained(model_directory)
+
+    # Tokenizer is not fine-tuned so we get it from HuggingFace directly.
+    tokenizer = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")
+    print('num labels = {}'.format(model.config.num_labels))
+    return model, tokenizer

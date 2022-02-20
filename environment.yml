@@ -10,4 +10,5 @@ dependencies:
   - wandb
   - boto3
   - torchvision=0.10.0
+  - pandas
 prefix: /Users/amitgh/opt/anaconda3/envs/oos-eval

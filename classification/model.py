@@ -5,22 +5,23 @@ import sys
 from enum import Enum
 
 import numpy as np
+import sklearn.metrics
+from sklearn.metrics import precision_score, f1_score, recall_score
 from torch import nn, optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from transformers import DistilBertModel, DistilBertTokenizer, Trainer, PreTrainedModel, \
-    PreTrainedTokenizer
+from transformers import DistilBertModel, DistilBertTokenizer, Trainer
 from transformers import AutoModelForSequenceClassification, TrainingArguments
+
 from data_loader.DataLoader import ClincDataSet, load_data, Group, load_mapped_data, ClincSingleData, \
-    load_model_from_disk, get_torch_device
-from data_loader.S3Loader import load_model, upload_model
+    load_pretrained_model_tokenizer, load_pretrained_model, \
+    local_model_directory, load_amt_test_data
+from data_loader.S3Loader import upload_model, load_model_from_disk
 import torch
 import wandb
+from data_loader.device_setup import device
 
-
-device = get_torch_device()
 print(f'device={device}')
-local_model_directory = "../saved_models/multiclass_cfn2"
 
 
 def persist_model(my_model, path_root="../saved_models/", append_name="") -> str:
@@ -28,23 +29,6 @@ def persist_model(my_model, path_root="../saved_models/", append_name="") -> str
     torch.save(my_model.state_dict(), save_path)
     print("Model saved in path {}".format(save_path))
     return save_path
-
-
-def load_pretrained_model(model_directory=local_model_directory, s3_param=None) \
-        -> (PreTrainedModel, PreTrainedTokenizer):
-    if s3_param:
-        bucket = s3_param['bucket']
-        path_to_model = s3_param['path_to_model']
-        print('Loading model from S3. Bucket={}, path_to_model={}.'.format(bucket, path_to_model))
-        model = load_model(bucket, path_to_model)
-    else:
-        print('Loading model from {}.'.format(model_directory))
-        model: PreTrainedModel = AutoModelForSequenceClassification.from_pretrained(model_directory)
-
-    # Tokenizer is not fine-tuned so we get it from HuggingFace directly.
-    tokenizer = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")
-    print('num labels = {}'.format(model.config.num_labels))
-    return model, tokenizer
 
 
 def analyze_custom_examples(sentences: list[str]):
@@ -90,23 +74,54 @@ def analyze_predictions(group: str, max_incorrect_count=10, model_directory=None
                     break
 
 
-def multi_class_classifier_accuracy(group: str, model_directory=local_model_directory, s3_params=None, balance_split=True):
-    model, tokenizer = load_pretrained_model(
-        model_directory=model_directory,
-        s3_param=s3_params if s3_params else None
-    )
+def print_sklearn_metrics(y_true, y_pred):
+    p_mi = precision_score(y_true, y_pred, average='micro', zero_division=0)
+    p_ma = precision_score(y_true, y_pred, average='macro', zero_division=0)
+    p_we = precision_score(y_true, y_pred, average='weighted', zero_division=0)
+    print(f"precision: micro={p_mi:.3g},"
+          f"macro={p_ma:.3g}, "
+          f"weighted={p_we:.3g}")
+
+    r_mi = recall_score(y_true, y_pred, average='micro', zero_division=0)
+    r_ma = recall_score(y_true, y_pred, average='macro', zero_division=0)
+    r_we = recall_score(y_true, y_pred, average='weighted', zero_division=0)
+    print(f"recall: micro={r_mi:.3g},"
+          f"macro={r_ma:.3g}, "
+          f"weighted={r_we:.3g}")
+
+    f1_mi = f1_score(y_true, y_pred, average='micro', zero_division=0)
+    f1_ma = f1_score(y_true, y_pred, average='macro', zero_division=0)
+    f1_we = f1_score(y_true, y_pred, average='weighted', zero_division=0)
+    print(f"f1-score: micro={f1_mi:.3g},"
+          f"macro={f1_ma:.3g}, "
+          f"weighted={f1_we:.3g}")
+
+    print([p_mi, p_ma, p_we, r_mi, r_ma, r_we, f1_mi, f1_ma, f1_we])
+
+
+def multi_class_classifier_accuracy(group: str, model_directory=local_model_directory, save_path=None,
+                                    s3_params=None, balance_split=True, amt_input_file=None):
+    model, tokenizer, _ = load_pretrained_model_tokenizer(s3_params, None, save_path, model_directory)
     model.to(device)
     configuration = model.config
 
     assert group in [Group.val.value, Group.test.value]
 
-    mapped_data = load_mapped_data({}, balance_split=balance_split)
-    test_dataset = ClincDataSet(mapped_data[group][1], tokenizer)
+    if amt_input_file:
+        test_data = load_amt_test_data(amt_input_file)
+        test_dataset = ClincDataSet(test_data, tokenizer)
+    else:
+        mapped_data = load_mapped_data({}, balance_split=balance_split)
+        test_dataset = ClincDataSet(mapped_data[group][1], tokenizer)
 
     data_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
 
     acc_list = []
     label_to_stats = {}  # key=label, value=(correct_count, incorrect_count)
+
+    # We populate this to calculate sklearn metrics at the end.
+    y_pred = np.array([])
+    y_true = np.array([])
 
     model.eval()
     with torch.no_grad():
@@ -121,6 +136,8 @@ def multi_class_classifier_accuracy(group: str, model_directory=local_model_dire
 
             labels_np = labels.cpu().numpy()
             preds_mask = 1 * (labels_np == preds)  # 1=correct, 0=incorrect
+            y_true = np.append(y_true, labels_np)
+            y_pred = np.append(y_pred, preds)
             for i, value in enumerate(preds_mask):
                 right, wrong = label_to_stats.get(labels_np[i], (0, 0))
                 if value == 1:
@@ -132,14 +149,38 @@ def multi_class_classifier_accuracy(group: str, model_directory=local_model_dire
             acc_list = np.append(acc_list, preds_mask)
             # print('running test acc = {:.3g}'.format(np.mean(acc_list)))
 
-    print('Accuracy for {} = {:.3g}'.format(group, np.mean(acc_list)))
+    print('N={}, Accuracy for {} = {:.3g}'.format(len(test_dataset), group, np.mean(acc_list)))
+    balanced_accuracy = 0
     print("label_name, id, accuracy, count")
     # sort by increasing accuracy.
     for label_id, stats in sorted(label_to_stats.items(), key=lambda x: x[1][0] / (x[1][0] + x[1][1])):
+        ba = stats[0] / (stats[0] + stats[1])
         print("{}, {}, {:.3g}, {}".format(
-            configuration.id2label[label_id], label_id, stats[0] / (stats[0] + stats[1]), (stats[0] + stats[1])
+            configuration.id2label[label_id], label_id, ba, (stats[0] + stats[1])
         ))
-    print('')
+        balanced_accuracy += ba
+    balanced_accuracy /= len(label_to_stats)
+    print("Balanced Accuracy = {:.3g}\n".format(balanced_accuracy))
+
+    # l2s = dict()
+    # for yt, yp in zip(y_true, y_pred):
+    #     val = l2s.get(yt, [0, 0])
+    #     l2s[yt] = [val[0] + 1 * (yt == yp), val[1] + 1 * (yt != yp)]
+
+    print(f" *** sklearn metrics ***")
+    print(f"array size = {len(y_pred)}")
+    print_sklearn_metrics(y_true, y_pred)
+
+    # Remove undefined class and calculate again.
+    y_true_trim, y_pred_trim = [], []
+    for yt, yp in zip(y_true, y_pred):
+        if yt != 16:
+            y_true_trim.append(yt)
+            y_pred_trim.append(yp)
+
+    print(f" *** sklearn metrics with undefined removed ***")
+    print(f"array size = {len(y_pred_trim)}")
+    print_sklearn_metrics(y_true_trim, y_pred_trim)
 
 
 def calculate_class_weights(label_count: dict) -> list:
@@ -203,10 +244,11 @@ def persist_object_to_disk(obj, complete_path: str):
 def train_classifier_with_unbalanced_data(
         max_epochs=1, batch_size=512, print_every=2,
         save_locally=True, s3_params=None,
-        start_from_pretrained=False, pretrained_model_path=None,
-        wandb_mode="online"
+        start_from_pretrained=False, save_path=None,
+        wandb_mode="online",
+        balance_split=False, balance_strategy=None
 ):
-    mapped_data = load_mapped_data({}, balance_split=False)
+    mapped_data = load_mapped_data({}, balance_split=balance_split, balance_strategy=balance_strategy)
 
     id2label = mapped_data['id2label']
     label2id = mapped_data['label2id']
@@ -222,7 +264,7 @@ def train_classifier_with_unbalanced_data(
     persist_object_to_disk(label2id, "../saved_models/class_imbalance/label2id.pickle")
 
     if start_from_pretrained:
-        load_model_from_disk(save_path=pretrained_model_path, empty_model=model)
+        model, _, _ = load_pretrained_model_tokenizer(save_path=save_path)
 
     tokenizer = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")
 
@@ -265,7 +307,7 @@ def train_classifier_with_unbalanced_data(
     for epoch in tqdm(range(max_epochs), total=max_epochs):
         model.train()
         train_loss = 0
-        for i, batch in enumerate(train_loader):
+        for i, batch in enumerate(tqdm(train_loader)):
             optimizer.zero_grad()
             for k, v in batch.items():
                 batch[k] = v.to(device)
@@ -285,14 +327,15 @@ def train_classifier_with_unbalanced_data(
                     'train_batch_loss': train_batch_loss,
                     'train_batch_acc': train_batch_acc
                 })
-                _, _ = perform_validation(model, val_loader, criterion, log_metric=True)
+                # _, _ = perform_validation(model, val_loader, criterion, log_metric=True)
         print(f'Epoch = {epoch}, train loss = {train_loss}')
         wandb.log({'train_loss': train_loss})
         val_loss, val_acc = perform_validation(model, val_loader, criterion, log_metric=True)
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             if save_locally:
-                persist_model(model, append_name=f"class_imbalance/{config.values()}")
+                persist_model(model, append_name=f"class_imbalance/split-{balance_split}-strategy-{balance_strategy}-{config.values()}.pt")
+    wandb.finish()
     print('done')
 
 
@@ -493,7 +536,7 @@ if __name__ == '__main__':
     #         'path_to_model': "multiclass_intent_cfn"
     #     }
     # )
-    multi_class_classifier_accuracy(Group.test.value, balance_split=False)
+    # multi_class_classifier_accuracy(Group.test.value, balance_split=False)
 
     # analyze_predictions(Group.val.value, max_incorrect_count=20)
 
@@ -514,6 +557,32 @@ if __name__ == '__main__':
     # )
 
     # train_classifier_with_unbalanced_data(max_epochs=10, print_every=5, save_locally=True,
-    #                                       wandb_mode=WandbMode.ONLINE.value)
+    #                                       wandb_mode=WandbMode.ONLINE.value,
+    #                                       balance_split=False, balance_strategy=None)
 
+    save_path_list = [
+        ("D2 with downsampling", "../saved_models/class_imbalance/split-True-strategy-down-dict_values-1700-20-512-5.pt"),
+        ("D2 with upsampling", "../saved_models/class_imbalance/split-True-strategy-up-dict_values([0.0001, 156400, 1, 512, 5, 'DistilBertModel+Linear', 'modified-CLINC150']).pt"),
+        ("D2 with balanced classes", "../saved_models/class_imbalance/split-True-strategy-None-dict_values([0.0001, 4600, 10, 512, 5, 'DistilBertModel+Linear', 'modified-CLINC150']).pt"),
+        ("D2 with weighted loss", "../saved_models/class_imbalance/split-False-strategy-None-dict_values([0.0001, 15000, 10, 512, 5, 'DistilBertModel+Linear', 'modified-CLINC150']).pt")
+    ]
+
+    # Do evaluation on AMT test data.
+    # for description, save_path in save_path_list:
+    #     print(f"  *** {description} ***")
+    #     multi_class_classifier_accuracy(
+    #         Group.test.value, balance_split=False,
+    #         save_path=save_path,
+    #         amt_input_file="../data/amt_test_data_2.json"
+    #     )
+    #     print("\t\t*****\n\n\n")
+
+    # Do evaluation on Dataset test data.
+    for description, save_path in save_path_list:
+        print(f"  *** {description} ***")
+        multi_class_classifier_accuracy(
+            Group.test.value, balance_split=False,
+            save_path=save_path,
+        )
+        print("\t\t*****\n\n\n")
     sys.exit()

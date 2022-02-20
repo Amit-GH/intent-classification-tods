@@ -8,9 +8,12 @@ import json
 from contextlib import contextmanager
 from io import BytesIO
 from tempfile import NamedTemporaryFile
+
+import torch
+from torch import nn
 from transformers import PretrainedConfig, PreTrainedModel, AutoModelForSequenceClassification
 
-from data_loader.DataLoader import load_model_from_disk, load_object_from_disk
+from data_loader.device_setup import device
 
 
 @contextmanager
@@ -135,6 +138,13 @@ def upload_model(s3_params: dict, local_directory_path=None, local_model_path=No
         return False
 
 
+def load_model_from_disk(save_path: str, empty_model: nn.Module) -> nn.Module:
+    empty_model.load_state_dict(torch.load(save_path, map_location=device))
+    empty_model.eval()
+    print('Model loaded from path {} successfully.'.format(save_path))
+    return empty_model
+
+
 def test_temporary_directory():
     with tempfile.TemporaryDirectory() as tmpdirname:
         bin_file = NamedTemporaryFile(dir=tmpdirname, suffix='_pytorch_model.bin')
@@ -189,4 +199,4 @@ if __name__ == '__main__':
         # model_name="dict_values([0.0001, 15000, 10, 512, 5, 'DistilBertModel+Linear', 'modified-CLINC150'].pt"
         model_name="weighted_class_model.pt"
     )
-    print('done')
+    print('done with setup')

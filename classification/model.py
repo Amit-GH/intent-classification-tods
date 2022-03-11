@@ -31,18 +31,27 @@ def persist_model(my_model, path_root="../saved_models/", append_name="") -> str
     return save_path
 
 
-def analyze_custom_examples(sentences: list[str]):
-    model, tokenizer = load_pretrained_model()
+def analyze_custom_examples(sentences: list[str], save_path: str, wikihow_data_json=None):
+    model, tokenizer, _ = load_pretrained_model_tokenizer(save_path=save_path,
+                                                          wikihow_data_json=wikihow_data_json)
+    model.to(device)
     configuration = model.config
+
+    print(f"{configuration.id2label}")
 
     model.eval()
     with torch.no_grad():
         for sent in sentences:
-            sentence_tokenize = tokenizer(sent, return_tensors="pt", padding=True)
+            sentence_tokenize = tokenizer(sent, return_tensors="pt", padding=True).to(device)
             res = model(**sentence_tokenize).logits
             probs = torch.softmax(res, dim=1).tolist()[0]
             pred = np.argmax(probs)
-            print("sent={}, pred={}".format(sent, configuration.id2label[pred]))
+            print("pred={}, sent={}, confidence={:.2f}".format(
+                configuration.id2label[pred], sent, probs[pred]*100
+            ))
+            # for p in probs:
+            #     print(f"{p:.2f}", end=" ")
+            # print()
 
 
 def analyze_predictions(group: str, max_incorrect_count=10, model_directory=None, s3_params=None):
@@ -78,30 +87,31 @@ def print_sklearn_metrics(y_true, y_pred):
     p_mi = precision_score(y_true, y_pred, average='micro', zero_division=0)
     p_ma = precision_score(y_true, y_pred, average='macro', zero_division=0)
     p_we = precision_score(y_true, y_pred, average='weighted', zero_division=0)
-    print(f"precision: micro={p_mi:.3g},"
+    print(f"precision: micro={p_mi:.3g}, "
           f"macro={p_ma:.3g}, "
           f"weighted={p_we:.3g}")
 
     r_mi = recall_score(y_true, y_pred, average='micro', zero_division=0)
     r_ma = recall_score(y_true, y_pred, average='macro', zero_division=0)
     r_we = recall_score(y_true, y_pred, average='weighted', zero_division=0)
-    print(f"recall: micro={r_mi:.3g},"
+    print(f"recall: micro={r_mi:.3g}, "
           f"macro={r_ma:.3g}, "
           f"weighted={r_we:.3g}")
 
     f1_mi = f1_score(y_true, y_pred, average='micro', zero_division=0)
     f1_ma = f1_score(y_true, y_pred, average='macro', zero_division=0)
     f1_we = f1_score(y_true, y_pred, average='weighted', zero_division=0)
-    print(f"f1-score: micro={f1_mi:.3g},"
+    print(f"f1-score: micro={f1_mi:.3g}, "
           f"macro={f1_ma:.3g}, "
           f"weighted={f1_we:.3g}")
 
-    print([p_mi, p_ma, p_we, r_mi, r_ma, r_we, f1_mi, f1_ma, f1_we])
+    # print([p_mi, p_ma, p_we, r_mi, r_ma, r_we, f1_mi, f1_ma, f1_we])
 
 
 def multi_class_classifier_accuracy(group: str, model_directory=local_model_directory, save_path=None,
-                                    s3_params=None, balance_split=True, amt_input_file=None):
-    model, tokenizer, _ = load_pretrained_model_tokenizer(s3_params, None, save_path, model_directory)
+                                    s3_params=None, balance_split=True, amt_input_file=None,
+                                    wikihow_data_json=None):
+    model, tokenizer, _ = load_pretrained_model_tokenizer(s3_params, None, save_path, model_directory, wikihow_data_json)
     model.to(device)
     configuration = model.config
 
@@ -111,7 +121,7 @@ def multi_class_classifier_accuracy(group: str, model_directory=local_model_dire
         test_data = load_amt_test_data(amt_input_file)
         test_dataset = ClincDataSet(test_data, tokenizer)
     else:
-        mapped_data = load_mapped_data({}, balance_split=balance_split)
+        mapped_data = load_mapped_data({}, balance_split=balance_split, wikihow_data_json=wikihow_data_json)
         test_dataset = ClincDataSet(mapped_data[group][1], tokenizer)
 
     data_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
@@ -201,6 +211,10 @@ def perform_validation(model, val_loader, criterion, log_metric=False, num_batch
     val_running_correct = 0
     label_total_count = np.zeros(len(model.config.id2label))
     label_correct_count = np.zeros_like(label_total_count)
+    label_predicted_count = np.zeros_like(label_total_count)  # to save how many times a particular label is predicted.
+
+    y_pred = np.array([])
+    y_true = np.array([])
 
     with torch.no_grad():
         for i, batch in enumerate(val_loader):
@@ -212,28 +226,39 @@ def perform_validation(model, val_loader, criterion, log_metric=False, num_batch
             _, preds = torch.max(outputs.logits, dim=1)
             val_running_correct += (preds == batch['labels']).sum().item()
 
-            # Calculate label wise accuracy data.
+            labels_np = batch['labels'].to(device).cpu().numpy()
+            y_true = np.append(y_true, labels_np)
+            y_pred = np.append(y_pred, preds.cpu().numpy())
+
+            # Calculate label wise accuracy/recall data.
             for label_id in batch['labels']:
                 label_total_count[label_id] += 1
             for j, is_correct in enumerate(preds == batch['labels']):
                 if is_correct:
                     label_correct_count[batch['labels'][j]] += 1
+            for pred in preds:
+                label_predicted_count[pred] += 1
 
             if num_batches == (i + 1):  # early stopping
                 break
+
     val_loss = val_running_loss
     val_accuracy = 100. * val_running_correct / len(val_loader.dataset)
+    f1_macro = f1_score(y_true, y_pred, average='macro', zero_division=0)
+
     if log_metric:
-        print(f'Val Loss: {val_loss:.4f}, Val Acc: {val_accuracy:.2f}')
+        print(f'Val Loss: {val_loss:.4f}, Val Acc: {val_accuracy:.2f}, Val F1 macro: {f1_macro:.2f}')
         label_accuracy = label_correct_count / label_total_count * 100
-        for i, acc in enumerate(label_accuracy):
-            print(f'id: {i}, label: {model.config.id2label[i]}, acc: {acc:.2f}')
+        label_precision = label_correct_count / label_predicted_count * 100
+        for i, (acc, prec) in enumerate(zip(label_accuracy, label_precision)):
+            print(f'id: {i}, label: {model.config.id2label[i]}, acc/recall: {acc:.2f}, prec: {prec:.2f}')
         wandb.log({
             'val_loss': val_loss,
-            'val_acc': val_accuracy
+            'val_acc': val_accuracy,
+            'val_f1_macro': f1_macro
         })
 
-    return val_loss, val_accuracy
+    return val_loss, val_accuracy, f1_macro
 
 
 def persist_object_to_disk(obj, complete_path: str):
@@ -246,9 +271,11 @@ def train_classifier_with_unbalanced_data(
         save_locally=True, s3_params=None,
         start_from_pretrained=False, save_path=None,
         wandb_mode="online",
-        balance_split=False, balance_strategy=None
+        balance_split=False, balance_strategy=None,
+        wikihow_data_json=None
 ):
-    mapped_data = load_mapped_data({}, balance_split=balance_split, balance_strategy=balance_strategy)
+    mapped_data = load_mapped_data({}, balance_split=balance_split, balance_strategy=balance_strategy,
+                                   wikihow_data_json=wikihow_data_json)
 
     id2label = mapped_data['id2label']
     label2id = mapped_data['label2id']
@@ -259,12 +286,19 @@ def train_classifier_with_unbalanced_data(
         id2label=id2label,
         label2id=label2id
     )
+
     # Save model metadata to disk for later usage.
-    persist_object_to_disk(id2label, "../saved_models/class_imbalance/id2label.pickle")
-    persist_object_to_disk(label2id, "../saved_models/class_imbalance/label2id.pickle")
+    id2label_save_path = "../saved_models/class_imbalance/id2label.pickle"
+    label2id_save_path = "../saved_models/class_imbalance/label2id.pickle"
+    if wikihow_data_json is not None:
+        id2label_save_path = id2label_save_path.replace("id2label", "id2label18")
+        label2id_save_path = label2id_save_path.replace("label2id", "label2id18")
+    persist_object_to_disk(id2label, id2label_save_path)
+    persist_object_to_disk(label2id, label2id_save_path)
 
     if start_from_pretrained:
-        model, _, _ = load_pretrained_model_tokenizer(save_path=save_path)
+        model, _, _ = load_pretrained_model_tokenizer(save_path=save_path,
+                                                      wikihow_data_json=wikihow_data_json)
 
     tokenizer = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")
 
@@ -291,6 +325,9 @@ def train_classifier_with_unbalanced_data(
 
     # Initialize wandb and add variables that you want associate with this run.
     os.environ.setdefault('WANDB_API_KEY', '713a778aae8db6219a582a6b794204a5af2cb75d')
+    dataset_name = "modified-CLINC150"
+    if wikihow_data_json is not None:
+        dataset_name += "-with-wikiHow"
     config = {
         "learning_rate": 1e-4,
         "train_size": len(train_loader.dataset),
@@ -298,7 +335,7 @@ def train_classifier_with_unbalanced_data(
         "batch_size": batch_size,
         "print_every": print_every,
         "architecture": "DistilBertModel+Linear",
-        "dataset": "modified-CLINC150"
+        "dataset": dataset_name
     }
     wandb.init(project="ms-project-701", entity="amitgh", config=config, mode=wandb_mode)
 
@@ -327,12 +364,12 @@ def train_classifier_with_unbalanced_data(
                     'train_batch_loss': train_batch_loss,
                     'train_batch_acc': train_batch_acc
                 })
-                # _, _ = perform_validation(model, val_loader, criterion, log_metric=True)
+                # _, _, _ = perform_validation(model, val_loader, criterion, log_metric=True)
         print(f'Epoch = {epoch}, train loss = {train_loss}')
         wandb.log({'train_loss': train_loss})
-        val_loss, val_acc = perform_validation(model, val_loader, criterion, log_metric=True)
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
+        val_loss, val_acc, val_f1_macro = perform_validation(model, val_loader, criterion, log_metric=True)
+        if val_f1_macro > best_val_acc:
+            best_val_acc = val_f1_macro
             if save_locally:
                 persist_model(model, append_name=f"class_imbalance/split-{balance_split}-strategy-{balance_strategy}-{config.values()}.pt")
     wandb.finish()
@@ -540,13 +577,39 @@ if __name__ == '__main__':
 
     # analyze_predictions(Group.val.value, max_incorrect_count=20)
 
-    # sentences = [
-    #     "For how long will this fish food last?",
-    #     "how to make chicken korma?",
-    #     "check my bank account.",
-    #     "What is the time right now",
-    #     "How to make tomato soup?"
-    # ]
+    sentences = [
+        # "For how long will this fish food last?",
+        # "how to make chicken korma?",
+        # "check my bank account.",
+        # "What is the time right now",
+        # "How to make tomato soup?",
+
+        "how to make paper airplane",
+        "how to wash car",
+        "help me with booking movie tickets",
+        "how to play guitar",
+        "how to clean carpet and floor",
+        "do you know anything about three d. printing",
+        "how to make a puppet",
+        "three d. printing",
+        "how do you make a paper airplane",
+        "d. i. y. how to make a paper airplane",
+        "how to plan a party",
+        "help me in washing clothes",
+        "help me in fixing broken toilet handle",
+        "let's make a skirt made out of a sock for my doll",
+        "let's make a skirt",
+        "tell me how to do a d. i. y. task",
+        "let's chat",
+        "repair my window",
+        "help me to fix a broken umbrella",
+        "I need some help with fixing my laptop",
+        "how to make fake long nails",
+        "how to make fake nails",
+        "how to make extension nails",
+        "how to convince your parents to play minecraft",
+        "how do you make a plant"
+    ]
     # analyze_custom_examples(sentences)
 
     # fine_tune_model(
@@ -556,16 +619,31 @@ if __name__ == '__main__':
     #     model_directory="../saved_models/fine_tuned_cfn"
     # )
 
-    # train_classifier_with_unbalanced_data(max_epochs=10, print_every=5, save_locally=True,
+    # train_classifier_with_unbalanced_data(max_epochs=5, print_every=5, save_locally=True,
     #                                       wandb_mode=WandbMode.ONLINE.value,
-    #                                       balance_split=False, balance_strategy=None)
+    #                                       balance_split=False, balance_strategy=None,
+    #                                       wikihow_data_json="../data/wikihow_titles.json")
 
-    save_path_list = [
-        ("D2 with downsampling", "../saved_models/class_imbalance/split-True-strategy-down-dict_values-1700-20-512-5.pt"),
-        ("D2 with upsampling", "../saved_models/class_imbalance/split-True-strategy-up-dict_values([0.0001, 156400, 1, 512, 5, 'DistilBertModel+Linear', 'modified-CLINC150']).pt"),
-        ("D2 with balanced classes", "../saved_models/class_imbalance/split-True-strategy-None-dict_values([0.0001, 4600, 10, 512, 5, 'DistilBertModel+Linear', 'modified-CLINC150']).pt"),
-        ("D2 with weighted loss", "../saved_models/class_imbalance/split-False-strategy-None-dict_values([0.0001, 15000, 10, 512, 5, 'DistilBertModel+Linear', 'modified-CLINC150']).pt")
-    ]
+    # save_path = "../saved_models/class_imbalance/split-False-strategy-None-wikihow-yes-dict_values([0.0001, 24000, 5, 512, 5, 'DistilBertModel+Linear', 'modified-CLINC150-with-wikiHow']).pt"
+    save_path = "../saved_models/class_imbalance/split-False-strategy-None-dict_values([0.0001, 24000, 5, 512, 5, 'DistilBertModel+Linear', 'modified-CLINC150-with-wikiHow']).pt"
+    # save_path = "../saved_models/class_imbalance/split-False-strategy-None-dict_values([0.0001, 33000, 5, 512, 5, 'DistilBertModel+Linear', 'modified-CLINC150-with-wikiHow']).pt"
+    # save_path = "../saved_models/class_imbalance/split-False-strategy-None-wikihow-yes-dict_values([0.0001, 33000, 5, 512, 5, 'DistilBertModel+Linear', 'modified-CLINC150-with-wikiHow']).pt"
+    # save_path = "../saved_models/class_imbalance/split-True-strategy-None-dict_values([0.0001, 28300, 5, 512, 5, 'DistilBertModel+Linear', 'modified-CLINC150-with-wikiHow']).pt"
+
+    # multi_class_classifier_accuracy(Group.test.value, balance_split=False,
+    #                                 save_path=save_path,
+    #                                 wikihow_data_json="../data/wikihow_titles.json",)
+
+    analyze_custom_examples(sentences,
+                            save_path=save_path,
+                            wikihow_data_json="../data/wikihow_titles.json",)
+
+    # save_path_list = [
+    #     ("D2 with downsampling", "../saved_models/class_imbalance/split-True-strategy-down-dict_values-1700-20-512-5.pt"),
+    #     ("D2 with upsampling", "../saved_models/class_imbalance/split-True-strategy-up-dict_values([0.0001, 156400, 1, 512, 5, 'DistilBertModel+Linear', 'modified-CLINC150']).pt"),
+    #     ("D2 with balanced classes", "../saved_models/class_imbalance/split-True-strategy-None-dict_values([0.0001, 4600, 10, 512, 5, 'DistilBertModel+Linear', 'modified-CLINC150']).pt"),
+    #     ("D2 with weighted loss", "../saved_models/class_imbalance/split-False-strategy-None-dict_values([0.0001, 15000, 10, 512, 5, 'DistilBertModel+Linear', 'modified-CLINC150']).pt")
+    # ]
 
     # Do evaluation on AMT test data.
     # for description, save_path in save_path_list:
@@ -578,11 +656,11 @@ if __name__ == '__main__':
     #     print("\t\t*****\n\n\n")
 
     # Do evaluation on Dataset test data.
-    for description, save_path in save_path_list:
-        print(f"  *** {description} ***")
-        multi_class_classifier_accuracy(
-            Group.test.value, balance_split=False,
-            save_path=save_path,
-        )
-        print("\t\t*****\n\n\n")
-    sys.exit()
+    # for description, save_path in save_path_list:
+    #     print(f"  *** {description} ***")
+    #     multi_class_classifier_accuracy(
+    #         Group.test.value, balance_split=False,
+    #         save_path=save_path,
+    #     )
+    #     print("\t\t*****\n\n\n")
+    # sys.exit()

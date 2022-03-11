@@ -127,7 +127,7 @@ def load_amt_test_data(file_path: str):
     return test_data
 
 
-def load_mapped_data(params: dict, balance_split=True, balance_strategy=None):
+def load_mapped_data(params: dict, balance_split=True, balance_strategy=None, wikihow_data_json=None):
     """
     To load clinc data into training, validation and testing which is mapped into custom classes as defined in
     the file intent_mapping.json.
@@ -164,13 +164,36 @@ def load_mapped_data(params: dict, balance_split=True, balance_strategy=None):
             label2id[custom_class] = idx
             id2label[idx] = custom_class
             idx += 1
-    # print('Total custom labels: {}\nCustom label names: {}'.format(len(label2id), label2id.keys()))
+    if wikihow_data_json is not None:
+        label2id["wikihow"] = idx
+        id2label[idx] = "wikihow"
+    print('Total custom labels: {}\nCustom label names: {}'.format(len(label2id), label2id.keys()))
 
     # Load validation, train, test data.
     lc_val, val_data = _load_custom_data(clinc_data, clinc_to_custom, id2label, label2id, Group.val)
     lc_train, train_data = _load_custom_data(clinc_data, clinc_to_custom, id2label, label2id, Group.train)
     # print(sorted(lc_train.items(), key=lambda x: x[0]))
     lc_test, test_data = _load_custom_data(clinc_data, clinc_to_custom, id2label, label2id, Group.test)
+
+    if wikihow_data_json is not None:
+        wikihow_data = json.load(open(wikihow_data_json, "r"))
+        lc_val_whow, val_data_whow = _load_custom_data(wikihow_data, {"wikihow": "wikihow"}, id2label, label2id,
+                                                       Group.val)
+        for k, v in lc_val_whow.items():
+            lc_val[k] = v
+        val_data += val_data_whow
+
+        lc_train_whow, train_data_whow = _load_custom_data(wikihow_data, {"wikihow": "wikihow"}, id2label, label2id,
+                                                       Group.train)
+        for k, v in lc_train_whow.items():
+            lc_train[k] = v
+        train_data += train_data_whow
+
+        lc_test_whow, test_data_whow = _load_custom_data(wikihow_data, {"wikihow": "wikihow"}, id2label, label2id,
+                                                       Group.test)
+        for k, v in lc_test_whow.items():
+            lc_test[k] = v
+        test_data += test_data_whow
 
     if balance_split:
         if balance_strategy == "up":
@@ -182,9 +205,9 @@ def load_mapped_data(params: dict, balance_split=True, balance_strategy=None):
             min_val_count = max_val_count = min(lc_val.values())
             min_test_count = max_test_count = min(lc_test.values())
         elif balance_strategy is None:
-            min_train_count, max_train_count = 200, 500
-            min_val_count, max_val_count = 40, 100
-            min_test_count, max_test_count = 60, 150
+            min_train_count, max_train_count = 1000, 5000
+            min_val_count, max_val_count = 400, 5000
+            min_test_count, max_test_count = 600, 1500
         else:
             raise Exception("Unsupported balance strategy passed.")
 
@@ -330,7 +353,8 @@ def load_object_from_disk(complete_path: str):
         return pickle.load(f)
 
 
-def load_pretrained_model_tokenizer(s3_params=None, model_name=None, save_path=None, model_directory=None):
+def load_pretrained_model_tokenizer(s3_params=None, model_name=None, save_path=None, model_directory=None,
+                                    wikihow_data_json=None):
     """
     Use s3_params and model_name for loading single file model from S3.
     Use save_path for loading single file model from local disk.
@@ -349,8 +373,13 @@ def load_pretrained_model_tokenizer(s3_params=None, model_name=None, save_path=N
         with s3_fileobj(bucket, f'{path_to_model}/id2label.pickle') as f:
             id2label = pickle.loads(f.read())
     elif save_path:
-        id2label = load_object_from_disk("../saved_models/class_imbalance/id2label.pickle")
-        label2id = load_object_from_disk("../saved_models/class_imbalance/label2id.pickle")
+        id2label_save_path = "../saved_models/class_imbalance/id2label.pickle"
+        label2id_save_path = "../saved_models/class_imbalance/label2id.pickle"
+        if wikihow_data_json is not None:
+            id2label_save_path = id2label_save_path.replace("id2label", "id2label18")
+            label2id_save_path = label2id_save_path.replace("label2id", "label2id18")
+        id2label = load_object_from_disk(id2label_save_path)
+        label2id = load_object_from_disk(label2id_save_path)
         empty_model = AutoModelForSequenceClassification.from_pretrained(
             "distilbert-base-uncased",
             num_labels=len(id2label),
